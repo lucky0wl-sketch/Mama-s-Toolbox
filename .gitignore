@@ -1,0 +1,14 @@
+game.db
+*.db
+nier-save-editor
+dist/
+bin/
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+
+coverage.out
+*.test

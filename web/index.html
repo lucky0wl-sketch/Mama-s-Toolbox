@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nier Save Editor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="bg-symbol" aria-hidden="true"></div>
+  <div class="page-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <img src="/theme/YoRHa_Symbol.webp" alt="" />
+        </div>
+        <p class="eyebrow">Local Save Tool</p>
+        <h1>Nier Save Editor</h1>
+        <p class="muted">YoRHa command-terminal styling for live SQLite save inspection, recovery, and control.</p>
+      </div>
+
+      <section class="panel">
+        <h2>Database</h2>
+        <p id="db-path" class="mono muted">Loading…</p>
+        <div class="stat-grid" id="overview-stats"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <h2>Users</h2>
+          <button id="refresh-users" class="ghost-button">Refresh</button>
+        </div>
+        <div id="users-empty" class="empty-state hidden">
+          No users found in the current database.
+        </div>
+        <div id="user-list" class="user-list"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="hero panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Editor Workspace</p>
+          <h2 id="hero-title">Select a user</h2>
+          <p id="hero-subtitle" class="muted">Every table in the SQLite file is now exposed through the editor, with user-scoped tables filtered by the selected player.</p>
+        </div>
+        <div class="hero-screen">
+          <img src="/theme/The_Bunker_Header_Full.jpg" alt="" />
+        </div>
+      </header>
+
+      <section class="panel hidden" id="user-summary-panel">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Selected User</p>
+            <h2>User Summary</h2>
+          </div>
+          <button id="delete-user" class="danger-button">Delete User</button>
+        </div>
+        <div class="summary-grid" id="user-summary-grid"></div>
+      </section>
+
+      <section class="panel hidden" id="table-panel">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Archive Tables</p>
+            <h2 id="table-heading">Inventory</h2>
+          </div>
+          <div class="toolbar">
+            <input id="table-search" class="table-search" type="search" placeholder="Search tables or categories" />
+            <select id="table-select"></select>
+            <button id="add-row" class="primary-button">Add Row</button>
+          </div>
+        </div>
+        <div id="table-meta" class="muted table-meta"></div>
+        <div class="table-wrap">
+          <table id="editor-table"></table>
+        </div>
+        <div id="table-empty" class="empty-state hidden">No rows in this table for the selected user.</div>
+      </section>
+
+      <section class="panel" id="notes-panel">
+        <p class="eyebrow">Command Notes</p>
+        <h2>Bunker Terminal Behavior</h2>
+        <p class="muted">The editor reads the live schema directly, categorizes every table, supports user-scoped filtering, and now includes direct search so you can jump to obscure records quickly without hunting through the full dropdown.</p>
+        <p id="lookup-status" class="muted">Master-data lookups are loading.</p>
+      </section>
+    </main>
+  </div>
+
+  <template id="cell-input-template">
+    <input class="table-input" />
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

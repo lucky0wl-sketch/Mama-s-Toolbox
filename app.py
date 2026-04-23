@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python 3 save editor backend for the NieR Re[in] SQLite save database."""
+"""Python 3 backend for Mama's Toolbox, a NieR Re[in] save database editor."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ DEFAULT_DB_CANDIDATES = (
     SCRIPT_DIR.parent / "lunar-tear" / "server" / "db" / "game.db",
 )
 DEFAULT_DB_HELP = "./game.db, ../lunar-tear/server/db/game.db"
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR.parent / "Engels" / "example-output"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR.parent / "Engels" / "output"
 DEFAULT_MOM_BANNER_PATH = SCRIPT_DIR.parent / "lunar-tear" / "server" / "assets" / "master_data" / "EntityMMomBannerTable.json"
 PRESETS_PATH = SCRIPT_DIR / "presets.json"
 WEB_DIR = SCRIPT_DIR / "web"
@@ -1950,7 +1950,7 @@ class EditorApp:
             ]
             # Server-side JSON uses a perpetual window so the Go server always
             # sees an active season regardless of when it was started relative
-            # to when the save editor ran.
+            # to when Mama's Toolbox ran.
             server_labyrinth_seasons = [
                 {
                     **row,
@@ -3891,7 +3891,7 @@ def parse_addr(value: str) -> tuple[str, int]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Python 3 save editor for the NieR Re[in] SQLite database.")
+    parser = argparse.ArgumentParser(description="Python 3 backend for Mama's Toolbox.")
     parser.add_argument(
         "--db",
         type=Path,
@@ -3907,7 +3907,7 @@ def parse_args() -> argparse.Namespace:
         "--extraction-output",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="path to Engels/example-output (default: ../Engels/example-output)",
+        help="path to Engels/output (default: ../Engels/output)",
     )
     parser.add_argument(
         "--mom-banner-table",
@@ -3930,7 +3930,7 @@ def main() -> int:
     app = EditorApp(db_path, extraction_output, mom_banner_path)
     EditorRequestHandler.app_state = app
     server = ThreadingHTTPServer((host, port), EditorRequestHandler)
-    print(f"Nier Save Editor listening on http://{host}:{port} using {db_path}")
+    print(f"Mama's Toolbox listening on http://{host}:{port} using {db_path}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -31,6 +31,7 @@ PRESETS_PATH = SCRIPT_DIR / "presets.json"
 WEB_DIR = SCRIPT_DIR / "web"
 THEME_DIR = SCRIPT_DIR / "theming"
 IMAGES_DIR = SCRIPT_DIR / "images"
+HOME_PLACEHOLDER = "~"
 
 
 def default_db_path() -> Path:
@@ -45,6 +46,23 @@ def resolve_cli_path(path: Path) -> Path:
     if path.is_absolute():
         return path.resolve()
     return (SCRIPT_DIR / path).resolve()
+
+
+def load_json_file(path: Path) -> Any:
+    # Accept UTF-8 files with or without a BOM to avoid platform/editor-specific decode failures.
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def display_path(path: Path) -> str:
+    try:
+        resolved = path.resolve()
+        relative = resolved.relative_to(Path.home())
+        relative_text = relative.as_posix()
+        return HOME_PLACEHOLDER if relative_text == "." else f"{HOME_PLACEHOLDER}/{relative_text}"
+    except ValueError:
+        return str(path)
+    except OSError:
+        return str(path)
 
 
 LOOKUP_FILE_MAP: dict[str, str] = {
@@ -170,7 +188,7 @@ class LookupRegistry:
         self.costume_active_skills: dict[str, dict[int, LookupEntry]] = {}
         self.summary = {
             "enabled": False,
-            "sourcePath": str(output_dir).replace(str(Path.home()), "/home/user"),
+            "sourcePath": display_path(output_dir),
             "entryCount": 0,
             "kinds": [],
         }
@@ -212,7 +230,7 @@ class LookupRegistry:
         path = self.output_dir / file_name
         if not path.is_file():
             return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         records = payload.get("records", [])
         entries: dict[str, LookupEntry] = {}
         for record in records:
@@ -236,13 +254,13 @@ class LookupRegistry:
         path = self.output_dir / file_name
         if not path.is_file():
             return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         result: dict[str, dict[int, LookupEntry]] = {}
         for record in payload.get("records", []):
             owner_id = stringify(record.get(owner_field))
             if not owner_id:
                 continue
-            slot_or_limit = int(record.get("slot_number", record.get(limit_field or "", 0)) or 0)
+            slot_or_limit = to_int(record.get("slot_number", record.get(limit_field or "", 0)))
             result.setdefault(owner_id, {})[slot_or_limit] = LookupEntry(
                 label=record.get("name", ""),
                 detail=detail_from_record(record),
@@ -254,10 +272,10 @@ class LookupRegistry:
         path = self.output_dir / file_name
         if not path.is_file():
             return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for record in payload.get("records", []):
-            destination_id = int(record.get("DestinationDomainId", 0) or 0)
+            destination_id = to_int(record.get("DestinationDomainId"))
             if destination_id <= 0:
                 continue
             asset_name = str(record.get("BannerAssetName", "") or "")
@@ -273,8 +291,8 @@ class LookupRegistry:
                 records,
                 key=lambda record: (
                     1 if record.get("name_found") else 0,
-                    int(record.get("SortOrderDesc", 0) or 0),
-                    -int(record.get("id", 0) or 0),
+                    to_int(record.get("SortOrderDesc")),
+                    -to_int(record.get("id")),
                 ),
             )
             mode = "step-up" if str(chosen.get("BannerAssetName", "")).startswith("step_up_") else "banner"
@@ -418,7 +436,7 @@ class EditorApp:
         path = self.extraction_output_dir / file_name
         if not path.is_file():
             return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         result: dict[str, dict[str, Any]] = {}
         for record in payload.get("records", []):
             record_id = stringify(record.get("id")).strip()
@@ -430,7 +448,7 @@ class EditorApp:
         path = self.extraction_output_dir / file_name
         if not path.is_file():
             return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for record in payload.get("records", []):
             key = stringify(record.get(key_field)).strip()
@@ -442,7 +460,7 @@ class EditorApp:
     def _load_presets(self) -> list[dict[str, Any]]:
         if not PRESETS_PATH.is_file():
             return []
-        payload = json.loads(PRESETS_PATH.read_text(encoding="utf-8"))
+        payload = load_json_file(PRESETS_PATH)
         presets = payload.get("presets", []) if isinstance(payload, dict) else []
         return [preset for preset in presets if isinstance(preset, dict)]
 
@@ -460,13 +478,13 @@ class EditorApp:
         return index
 
     def _display_path(self, path: Path) -> str:
-        return str(path).replace(str(Path.home()), "/home/user")
+        return display_path(path)
 
     def _load_gacha_medal_ids(self) -> set[int]:
         medal_path = self.mom_banner_path.parent / "EntityMGachaMedalTable.json"
         if not medal_path.is_file():
             return set()
-        payload = json.loads(medal_path.read_text(encoding="utf-8"))
+        payload = load_json_file(medal_path)
         if not isinstance(payload, list):
             return set()
         result: set[int] = set()
@@ -598,6 +616,13 @@ class EditorApp:
             )
         )
         return candidates
+
+    def _mom_banner_logic_source_path(self) -> Path:
+        try:
+            base = self.mom_banner_path.parents[2]
+        except IndexError:
+            base = self.mom_banner_path.parent
+        return base / "internal" / "masterdata" / "gacha.go"
 
     def _master_data_backup_candidates(self, path: Path) -> list[Path]:
         stable = path.with_name(f"{path.name}.full-backup")
@@ -869,7 +894,7 @@ class EditorApp:
     def _load_mom_banner_rows(self, path: Path) -> list[dict[str, Any]]:
         if not path.is_file():
             return []
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_file(path)
         if not isinstance(payload, list):
             return []
         return [row for row in payload if isinstance(row, dict)]
@@ -2281,7 +2306,7 @@ class EditorApp:
             "unusableRecords": unusable_records,
             "unsupportedCount": len(unusable_records),
             "rawCatalogCount": len(source_gacha_rows),
-            "logicSourcePath": self._display_path(self.mom_banner_path.parents[2] / "internal" / "masterdata" / "gacha.go"),
+            "logicSourcePath": self._display_path(self._mom_banner_logic_source_path()),
         }
 
     def save_active_gacha_banners(self, active_banner_ids: list[Any]) -> dict[str, Any]:
@@ -2762,7 +2787,7 @@ class EditorApp:
         ):
             counts[table] = self.must_count(table)
         return {
-            "dbPath": str(self.db_path).replace(str(Path.home()), "/home/user"),
+            "dbPath": display_path(self.db_path),
             "userCount": self.must_count("users"),
             "tableCount": len(self.schema),
             "rowCounts": counts,
@@ -3707,7 +3732,7 @@ def to_int(value: Any) -> int:
         return 0
     try:
         return int(float(text))
-    except ValueError:
+    except (OverflowError, ValueError):
         return 0
 
 
@@ -3856,7 +3881,10 @@ def format_unix_millis(value: Any) -> str:
     millis = to_int(value)
     if millis <= 0:
         return ""
-    return datetime.fromtimestamp(millis / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    try:
+        return datetime.fromtimestamp(millis / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (OSError, OverflowError, ValueError):
+        return ""
 
 
 def detail_from_record(record: dict[str, Any]) -> str:

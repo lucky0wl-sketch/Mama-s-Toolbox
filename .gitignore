@@ -1,14 +1,17 @@
 game.db
 *.db
-nier-save-editor
+*.sqlite
+*.sqlite3
 dist/
 bin/
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 .DS_Store
 Thumbs.db
 
 .idea/
 .vscode/
-
-coverage.out
-*.test

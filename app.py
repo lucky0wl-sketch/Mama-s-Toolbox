@@ -38,6 +38,14 @@ def default_db_path() -> Path:
     for candidate in DEFAULT_DB_CANDIDATES:
         resolved = candidate.resolve()
         if resolved.is_file():
+            try:
+                if resolved.stat().st_size <= 0:
+                    continue
+                with resolved.open("rb") as handle:
+                    if handle.read(16) != b"SQLite format 3\x00":
+                        continue
+            except OSError:
+                continue
             return resolved
     return DEFAULT_DB_CANDIDATES[0].resolve()
 
@@ -3076,10 +3084,19 @@ class EditorApp:
 
         costume_record = self.playable_costumes.get(costume_id, {})
         character_id = stringify(costume_record.get("CharacterId")).strip()
+        character_record = self.playable_characters.get(character_id, {}) if character_id and character_id != "0" else {}
+        weapon_id = stringify(character_record.get("DefaultWeaponId")).strip()
+        if weapon_id == "0":
+            weapon_id = ""
+        user_costume_uuid = stringify(row.get("user_costume_uuid")).strip()
+        acquired_at = to_int(row.get("acquisition_datetime"))
+        if acquired_at <= 0:
+            acquired_at = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
         with closing(self.connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._upsert_with_connection(connection, "user_costumes", row)
+            self.ensure_costume_active_skill(connection, user_id, user_costume_uuid, acquired_at)
 
             if character_id and character_id != "0":
                 self._upsert_with_connection(
@@ -3093,6 +3110,11 @@ class EditorApp:
                         },
                     ),
                 )
+
+            weapon_uuid = ""
+            if weapon_id:
+                weapon_uuid = self.ensure_owned_weapon(connection, user_id, weapon_id, acquired_at)
+                self.ensure_weapon_support_rows(connection, user_id, weapon_id, weapon_uuid, acquired_at)
 
             connection.commit()
 
@@ -3336,6 +3358,107 @@ class EditorApp:
                 (user_id, weapon_id, 1, acquired_at),
             )
 
+    def character_id_for_costume(self, costume_id: str) -> str:
+        costume_record = self.playable_costumes.get(costume_id, {}) or self.costumes.get(costume_id, {})
+        return stringify(costume_record.get("CharacterId")).strip()
+
+    def _delete_deck_character_bundle(
+        self,
+        connection: sqlite3.Connection,
+        user_id: str,
+        user_deck_character_uuid: str,
+    ) -> None:
+        if not user_deck_character_uuid:
+            return
+
+        connection.execute(
+            'DELETE FROM "user_deck_sub_weapons" WHERE "user_id" = ? AND "user_deck_character_uuid" = ?',
+            (user_id, user_deck_character_uuid),
+        )
+        connection.execute(
+            'DELETE FROM "user_deck_parts" WHERE "user_id" = ? AND "user_deck_character_uuid" = ?',
+            (user_id, user_deck_character_uuid),
+        )
+        for column_name in ("user_deck_character_uuid01", "user_deck_character_uuid02", "user_deck_character_uuid03"):
+            connection.execute(
+                f'UPDATE "user_decks" SET {quote_ident(column_name)} = NULL WHERE "user_id" = ? AND {quote_ident(column_name)} = ?',
+                (user_id, user_deck_character_uuid),
+            )
+        connection.execute(
+            'DELETE FROM "user_deck_characters" WHERE "user_id" = ? AND "user_deck_character_uuid" = ?',
+            (user_id, user_deck_character_uuid),
+        )
+
+    def _delete_costume_bundle(
+        self,
+        connection: sqlite3.Connection,
+        user_id: str,
+        user_costume_uuid: str,
+    ) -> None:
+        if not user_costume_uuid:
+            return
+
+        deck_character_rows = connection.execute(
+            'SELECT "user_deck_character_uuid" FROM "user_deck_characters" WHERE "user_id" = ? AND "user_costume_uuid" = ?',
+            (user_id, user_costume_uuid),
+        ).fetchall()
+        for row in deck_character_rows:
+            self._delete_deck_character_bundle(connection, user_id, stringify(row[0]).strip())
+
+        connection.execute(
+            'DELETE FROM "user_costume_active_skills" WHERE "user_id" = ? AND "user_costume_uuid" = ?',
+            (user_id, user_costume_uuid),
+        )
+        connection.execute(
+            'DELETE FROM "user_costumes" WHERE "user_id" = ? AND "user_costume_uuid" = ?',
+            (user_id, user_costume_uuid),
+        )
+
+    def _delete_character_if_no_costumes(
+        self,
+        connection: sqlite3.Connection,
+        user_id: str,
+        character_id: str,
+    ) -> None:
+        if not user_id or not character_id:
+            return
+
+        remaining_costume_rows = connection.execute(
+            'SELECT "costume_id" FROM "user_costumes" WHERE "user_id" = ?',
+            (user_id,),
+        ).fetchall()
+        for row in remaining_costume_rows:
+            if self.character_id_for_costume(stringify(row[0]).strip()) == character_id:
+                return
+
+        connection.execute(
+            'DELETE FROM "user_characters" WHERE "user_id" = ? AND "character_id" = ?',
+            (user_id, character_id),
+        )
+
+    def _delete_character_bundle(
+        self,
+        connection: sqlite3.Connection,
+        user_id: str,
+        character_id: str,
+    ) -> None:
+        if not user_id or not character_id:
+            return
+
+        costume_rows = connection.execute(
+            'SELECT "user_costume_uuid", "costume_id" FROM "user_costumes" WHERE "user_id" = ?',
+            (user_id,),
+        ).fetchall()
+        for user_costume_uuid, costume_id in costume_rows:
+            if self.character_id_for_costume(stringify(costume_id).strip()) != character_id:
+                continue
+            self._delete_costume_bundle(connection, user_id, stringify(user_costume_uuid).strip())
+
+        connection.execute(
+            'DELETE FROM "user_characters" WHERE "user_id" = ? AND "character_id" = ?',
+            (user_id, character_id),
+        )
+
     def delete_row(self, table: str, key: dict[str, Any]) -> None:
         schema = self.schema[table]
         if not schema.primary_key:
@@ -3346,7 +3469,25 @@ class EditorApp:
         where_sql = " AND ".join(f"{quote_ident(name)} = ?" for name in schema.primary_key)
         values = [key[name] for name in schema.primary_key]
         with closing(self.connect()) as connection:
-            connection.execute(f'DELETE FROM {quote_ident(table)} WHERE {where_sql}', values)
+            connection.execute("BEGIN IMMEDIATE")
+            if table == "user_characters":
+                self._delete_character_bundle(
+                    connection,
+                    stringify(key.get("user_id")).strip(),
+                    stringify(key.get("character_id")).strip(),
+                )
+            elif table == "user_costumes":
+                user_id = stringify(key.get("user_id")).strip()
+                user_costume_uuid = stringify(key.get("user_costume_uuid")).strip()
+                costume_row = connection.execute(
+                    'SELECT "costume_id" FROM "user_costumes" WHERE "user_id" = ? AND "user_costume_uuid" = ? LIMIT 1',
+                    (user_id, user_costume_uuid),
+                ).fetchone()
+                character_id = self.character_id_for_costume(stringify(costume_row[0]).strip()) if costume_row else ""
+                self._delete_costume_bundle(connection, user_id, user_costume_uuid)
+                self._delete_character_if_no_costumes(connection, user_id, character_id)
+            else:
+                connection.execute(f'DELETE FROM {quote_ident(table)} WHERE {where_sql}', values)
             connection.commit()
 
     def delete_user(self, user_id: str) -> None:

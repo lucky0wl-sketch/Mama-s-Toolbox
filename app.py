@@ -489,16 +489,8 @@ class EditorApp:
         return display_path(path)
 
     def _load_gacha_medal_ids(self) -> set[int]:
-        medal_path = self.mom_banner_path.parent / "EntityMGachaMedalTable.json"
-        if not medal_path.is_file():
-            return set()
-        payload = load_json_file(medal_path)
-        if not isinstance(payload, list):
-            return set()
         result: set[int] = set()
-        for row in payload:
-            if not isinstance(row, dict):
-                continue
+        for row in self.gacha_medals.values():
             gacha_id = to_int(row.get("ShopTransitionGachaId"))
             if gacha_id > 0:
                 result.add(gacha_id)
@@ -682,6 +674,17 @@ class EditorApp:
 
     def _master_memory_table_schema(self, table_name: str) -> list[str]:
         schemas = {
+            "m_mom_banner": [
+                "MomBannerId",
+                "SortOrderDesc",
+                "DestinationDomainType",
+                "DestinationDomainId",
+                "BannerAssetName",
+                "IsEmphasis",
+                "StartDatetime",
+                "EndDatetime",
+                "TargetUserStatusType",
+            ],
             "m_event_quest_chapter": [
                 "EventQuestChapterId",
                 "EventQuestType",
@@ -740,6 +743,11 @@ class EditorApp:
                 "StartDatetime",
                 "EndDatetime",
             ],
+            "m_webview_mission_title_text": [
+                "WebviewMissionTitleTextId",
+                "LanguageType",
+                "Text",
+            ],
             "m_event_quest_labyrinth_season": [
                 "EventQuestChapterId",
                 "SeasonNumber",
@@ -747,11 +755,77 @@ class EditorApp:
                 "EndDatetime",
                 "SeasonRewardGroupId",
             ],
+            "m_event_quest_daily_group_target_chapter": [
+                "EventQuestDailyGroupId",
+                "SortOrder",
+                "EventQuestChapterId",
+            ],
+            "m_event_quest_tower_asset": [
+                "EventQuestChapterId",
+                "TowerAssetId",
+            ],
+            "m_event_quest_chapter_limit_content_relation": [
+                "EventQuestLimitContentId",
+                "EventQuestChapterId",
+            ],
+            "m_event_quest_limit_content": [
+                "EventQuestLimitContentId",
+                "CostumeId",
+                "QuestDeckRestrictionId",
+                "QuestDeckRestrictionDeckType",
+                "DifficultyType",
+                "StartDatetime",
+                "EndDatetime",
+                "CharacterId",
+            ],
+            "m_library_event_quest_story_grouping": [
+                "LibraryStoryGroupingId",
+                "EventQuestChapterId",
+                "SortOrder",
+            ],
+            "m_event_quest_chapter_character": [
+                "EventQuestChapterId",
+                "CharacterId",
+            ],
+            "m_extra_quest_group": [
+                "QuestId",
+                "ExtraQuestIndex",
+                "ExtraQuestId",
+            ],
+            "m_extra_quest_group_in_main_quest_chapter": [
+                "MainQuestChapterId",
+                "ExtraQuestIndex",
+                "ExtraQuestId",
+            ],
         }
         schema = schemas.get(table_name)
         if not schema:
             raise ValueError(f"unsupported master-memory table: {table_name}")
         return schema
+
+    def _master_memory_table_for_path(self, path: Path) -> str:
+        file_map = {
+            "EntityMMomBannerTable.json": "m_mom_banner",
+            "EntityMEventQuestChapterTable.json": "m_event_quest_chapter",
+            "EntityMEventQuestSequenceGroupTable.json": "m_event_quest_sequence_group",
+            "EntityMEventQuestSequenceTable.json": "m_event_quest_sequence",
+            "EntityMEventQuestLabyrinthSeasonTable.json": "m_event_quest_labyrinth_season",
+            "EntityMEventQuestDailyGroupTargetChapterTable.json": "m_event_quest_daily_group_target_chapter",
+            "EntityMEventQuestTowerAssetTable.json": "m_event_quest_tower_asset",
+            "EntityMEventQuestChapterLimitContentRelationTable.json": "m_event_quest_chapter_limit_content_relation",
+            "EntityMEventQuestLimitContentTable.json": "m_event_quest_limit_content",
+            "EntityMLibraryEventQuestStoryGroupingTable.json": "m_library_event_quest_story_grouping",
+            "EntityMEventQuestChapterCharacterTable.json": "m_event_quest_chapter_character",
+            "EntityMWebviewMissionTable.json": "m_webview_mission",
+            "EntityMWebviewPanelMissionTable.json": "m_webview_panel_mission",
+            "EntityMWebviewMissionTitleTextTable.json": "m_webview_mission_title_text",
+            "EntityMExtraQuestGroupTable.json": "m_extra_quest_group",
+            "EntityMExtraQuestGroupInMainQuestChapterTable.json": "m_extra_quest_group_in_main_quest_chapter",
+            "EntityMSideStoryQuestTable.json": "m_side_story_quest",
+            "EntityMSideStoryQuestLimitContentTable.json": "m_side_story_quest_limit_content",
+            "EntityMSideStoryQuestSceneTable.json": "m_side_story_quest_scene",
+        }
+        return file_map.get(path.name, "")
 
     def _encode_master_memory_table(self, table_name: str, rows: list[dict[str, Any]]) -> bytes:
         try:
@@ -768,6 +842,8 @@ class EditorApp:
             for row in rows
             if isinstance(row, dict)
         ]
+        if table_name in {"m_extra_quest_group", "m_event_quest_tower_asset"}:
+            return msgpack.packb(array_rows, use_bin_type=True)
         raw_payload = msgpack.packb(array_rows, use_bin_type=True)
         payload = msgpack.packb(len(raw_payload), use_bin_type=True) + lz4.block.compress(
             raw_payload,
@@ -871,16 +947,19 @@ class EditorApp:
             if size <= 0:
                 result[table_name] = []
                 continue
-            ext = msgpack.unpackb(blob[offset:offset + size], raw=False, strict_map_key=False)
-            ext_unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
-            ext_unpacker.feed(ext.data)
-            uncompressed_size = next(ext_unpacker)
-            compressed_payload = ext.data[ext_unpacker.tell():]
-            rows = msgpack.unpackb(
-                lz4.block.decompress(compressed_payload, uncompressed_size=uncompressed_size),
-                raw=False,
-                strict_map_key=False,
-            )
+            packed = msgpack.unpackb(blob[offset:offset + size], raw=False, strict_map_key=False)
+            if hasattr(packed, "data"):
+                ext_unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+                ext_unpacker.feed(packed.data)
+                uncompressed_size = next(ext_unpacker)
+                compressed_payload = packed.data[ext_unpacker.tell():]
+                rows = msgpack.unpackb(
+                    lz4.block.decompress(compressed_payload, uncompressed_size=uncompressed_size),
+                    raw=False,
+                    strict_map_key=False,
+                )
+            else:
+                rows = packed
             schema = self._master_memory_table_schema(table_name)
             result[table_name] = [
                 {
@@ -900,12 +979,20 @@ class EditorApp:
         return self.mom_banner_path
 
     def _load_mom_banner_rows(self, path: Path) -> list[dict[str, Any]]:
-        if not path.is_file():
+        if path.is_file():
+            payload = load_json_file(path)
+            if not isinstance(payload, list):
+                return []
+            return [row for row in payload if isinstance(row, dict)]
+        table_name = self._master_memory_table_for_path(path)
+        if not table_name:
             return []
-        payload = load_json_file(path)
-        if not isinstance(payload, list):
-            return []
-        return [row for row in payload if isinstance(row, dict)]
+        return self._load_master_memory_tables([table_name]).get(table_name, [])
+
+    def _write_master_data_rows(self, path: Path, rows: list[dict[str, Any]]) -> None:
+        if not path.parent.is_dir():
+            return
+        path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
     def _event_selector_paths(self) -> dict[str, dict[str, Path]]:
         root = self.mom_banner_path.parent
@@ -1922,16 +2009,35 @@ class EditorApp:
             labyrinth_season_path = paths[group]["labyrinth_seasons"]
             webview_mission_path = paths[group]["webview_missions"]
             webview_panel_mission_path = paths[group]["webview_panel_missions"]
+            root = self.mom_banner_path.parent
+            daily_target_path = root / "EntityMEventQuestDailyGroupTargetChapterTable.json"
+            tower_asset_path = root / "EntityMEventQuestTowerAssetTable.json"
+            limit_relation_path = root / "EntityMEventQuestChapterLimitContentRelationTable.json"
+            limit_content_path = root / "EntityMEventQuestLimitContentTable.json"
+            library_grouping_path = root / "EntityMLibraryEventQuestStoryGroupingTable.json"
+            chapter_character_path = root / "EntityMEventQuestChapterCharacterTable.json"
             chapter_source = self._master_data_catalog_source(chapter_path)
             groups_source = self._master_data_catalog_source(groups_path)
             seq_source = self._master_data_catalog_source(seq_path)
             labyrinth_season_source = self._master_data_catalog_source(labyrinth_season_path)
             webview_mission_source = self._master_data_catalog_source(webview_mission_path)
             webview_panel_mission_source = self._master_data_catalog_source(webview_panel_mission_path)
+            daily_target_source = self._master_data_catalog_source(daily_target_path)
+            tower_asset_source = self._master_data_catalog_source(tower_asset_path)
+            limit_relation_source = self._master_data_catalog_source(limit_relation_path)
+            limit_content_source = self._master_data_catalog_source(limit_content_path)
+            library_grouping_source = self._master_data_catalog_source(library_grouping_path)
+            chapter_character_source = self._master_data_catalog_source(chapter_character_path)
             chapter_rows = self._load_mom_banner_rows(chapter_source)
             group_rows = self._load_mom_banner_rows(groups_source)
             seq_rows = self._load_mom_banner_rows(seq_source)
             labyrinth_season_rows = self._load_mom_banner_rows(labyrinth_season_source)
+            daily_target_rows = self._load_mom_banner_rows(daily_target_source)
+            tower_asset_rows = self._load_mom_banner_rows(tower_asset_source)
+            limit_relation_rows = self._load_mom_banner_rows(limit_relation_source)
+            limit_content_rows = self._load_mom_banner_rows(limit_content_source)
+            library_grouping_rows = self._load_mom_banner_rows(library_grouping_source)
+            chapter_character_rows = self._load_mom_banner_rows(chapter_character_source)
             event_catalog = self.event_selector_catalog()
             event_records = event_catalog.get("groups", {}).get("event_quests", {}).get("records", [])
             records_by_id = {
@@ -1959,6 +2065,31 @@ class EditorApp:
             selected_groups = [row for row in group_rows if to_int(row.get("EventQuestSequenceGroupId")) in selected_group_ids]
             selected_sequence_ids = {to_int(row.get("EventQuestSequenceId")) for row in selected_groups}
             selected_sequences = [row for row in seq_rows if to_int(row.get("EventQuestSequenceId")) in selected_sequence_ids]
+            selected_daily_target_rows = [
+                row for row in daily_target_rows if to_int(row.get("EventQuestChapterId")) in selected_ids
+            ]
+            selected_tower_asset_rows = [
+                row for row in tower_asset_rows if to_int(row.get("EventQuestChapterId")) in selected_ids
+            ]
+            selected_limit_relation_rows = [
+                row for row in limit_relation_rows if to_int(row.get("EventQuestChapterId")) in selected_ids
+            ]
+            selected_limit_content_ids = {
+                to_int(row.get("EventQuestLimitContentId"))
+                for row in selected_limit_relation_rows
+                if to_int(row.get("EventQuestLimitContentId")) > 0
+            }
+            selected_limit_content_rows = [
+                row
+                for row in limit_content_rows
+                if to_int(row.get("EventQuestLimitContentId")) in selected_limit_content_ids
+            ]
+            selected_library_grouping_rows = [
+                row for row in library_grouping_rows if to_int(row.get("EventQuestChapterId")) in selected_ids
+            ]
+            selected_chapter_character_rows = [
+                row for row in chapter_character_rows if to_int(row.get("EventQuestChapterId")) in selected_ids
+            ]
             selected_labyrinth_chapter_ids = {
                 to_int(row.get("EventQuestChapterId"))
                 for row in selected_chapters
@@ -2035,22 +2166,40 @@ class EditorApp:
                 (groups_path, groups_source),
                 (seq_path, seq_source),
                 (labyrinth_season_path, labyrinth_season_source),
+                (daily_target_path, daily_target_source),
+                (tower_asset_path, tower_asset_source),
+                (limit_relation_path, limit_relation_source),
+                (limit_content_path, limit_content_source),
+                (library_grouping_path, library_grouping_source),
+                (chapter_character_path, chapter_character_source),
                 (webview_mission_path, webview_mission_source),
                 (webview_panel_mission_path, webview_panel_mission_source),
             ):
                 self._ensure_master_data_backup(path, source)
-            chapter_path.write_text(json.dumps(selected_chapters, indent=2) + "\n", encoding="utf-8")
-            groups_path.write_text(json.dumps(selected_groups, indent=2) + "\n", encoding="utf-8")
-            seq_path.write_text(json.dumps(selected_sequences, indent=2) + "\n", encoding="utf-8")
-            labyrinth_season_path.write_text(json.dumps(server_labyrinth_seasons, indent=2) + "\n", encoding="utf-8")
-            webview_mission_path.write_text(json.dumps(filtered_webview_missions, indent=2) + "\n", encoding="utf-8")
-            webview_panel_mission_path.write_text(json.dumps(filtered_webview_panel_missions, indent=2) + "\n", encoding="utf-8")
+            self._write_master_data_rows(chapter_path, selected_chapters)
+            self._write_master_data_rows(groups_path, selected_groups)
+            self._write_master_data_rows(seq_path, selected_sequences)
+            self._write_master_data_rows(labyrinth_season_path, server_labyrinth_seasons)
+            self._write_master_data_rows(daily_target_path, selected_daily_target_rows)
+            self._write_master_data_rows(tower_asset_path, selected_tower_asset_rows)
+            self._write_master_data_rows(limit_relation_path, selected_limit_relation_rows)
+            self._write_master_data_rows(limit_content_path, selected_limit_content_rows)
+            self._write_master_data_rows(library_grouping_path, selected_library_grouping_rows)
+            self._write_master_data_rows(chapter_character_path, selected_chapter_character_rows)
+            self._write_master_data_rows(webview_mission_path, filtered_webview_missions)
+            self._write_master_data_rows(webview_panel_mission_path, filtered_webview_panel_missions)
             self._patch_master_memory_tables(
                 {
                     "m_event_quest_chapter": selected_chapters,
                     "m_event_quest_sequence_group": selected_groups,
                     "m_event_quest_sequence": selected_sequences,
                     "m_event_quest_labyrinth_season": selected_labyrinth_seasons,
+                    "m_event_quest_daily_group_target_chapter": selected_daily_target_rows,
+                    "m_event_quest_tower_asset": selected_tower_asset_rows,
+                    "m_event_quest_chapter_limit_content_relation": selected_limit_relation_rows,
+                    "m_event_quest_limit_content": selected_limit_content_rows,
+                    "m_library_event_quest_story_grouping": selected_library_grouping_rows,
+                    "m_event_quest_chapter_character": selected_chapter_character_rows,
                     "m_webview_mission": filtered_webview_missions,
                     "m_webview_panel_mission": filtered_webview_panel_missions,
                 }
@@ -2059,15 +2208,29 @@ class EditorApp:
 
         if group == "extra_quests":
             groups_path = paths[group]["groups"]
+            chapter_map_path = paths[group]["chapter_map"]
             source = self._master_data_catalog_source(groups_path)
+            chapter_map_source = self._master_data_catalog_source(chapter_map_path)
             rows = self._load_mom_banner_rows(source)
+            chapter_map_rows = self._load_mom_banner_rows(chapter_map_source)
             known_ids = {to_int(row.get("ExtraQuestId")) for row in rows}
             unknown_ids = sorted(selected_ids - known_ids)
             if unknown_ids:
                 raise ValueError(f"unknown extra quest ids: {', '.join(str(value) for value in unknown_ids)}")
             selected_rows = [row for row in rows if to_int(row.get("ExtraQuestId")) in selected_ids]
+            selected_chapter_map_rows = [
+                row for row in chapter_map_rows if to_int(row.get("ExtraQuestId")) in selected_ids
+            ]
             self._ensure_master_data_backup(groups_path, source)
-            groups_path.write_text(json.dumps(selected_rows, indent=2) + "\n", encoding="utf-8")
+            self._ensure_master_data_backup(chapter_map_path, chapter_map_source)
+            self._write_master_data_rows(groups_path, selected_rows)
+            self._write_master_data_rows(chapter_map_path, selected_chapter_map_rows)
+            self._patch_master_memory_tables(
+                {
+                    "m_extra_quest_group": selected_rows,
+                    "m_extra_quest_group_in_main_quest_chapter": selected_chapter_map_rows,
+                }
+            )
             return self.event_selector_catalog()
 
         if group == "side_story_quests":
@@ -2090,9 +2253,9 @@ class EditorApp:
             selected_scenes = [row for row in scene_rows if to_int(row.get("SideStoryQuestId")) in selected_ids]
             for path, source in ((quest_path, quest_source), (limit_path, limit_source), (scene_path, scene_source)):
                 self._ensure_master_data_backup(path, source)
-            quest_path.write_text(json.dumps(selected_quests, indent=2) + "\n", encoding="utf-8")
-            limit_path.write_text(json.dumps(selected_limits, indent=2) + "\n", encoding="utf-8")
-            scene_path.write_text(json.dumps(selected_scenes, indent=2) + "\n", encoding="utf-8")
+            self._write_master_data_rows(quest_path, selected_quests)
+            self._write_master_data_rows(limit_path, selected_limits)
+            self._write_master_data_rows(scene_path, selected_scenes)
             self._patch_master_memory_tables(
                 {
                     "m_side_story_quest": selected_quests,
@@ -2268,7 +2431,7 @@ class EditorApp:
             },
         )
         return {
-            "enabled": current_exists or source_path.is_file(),
+            "enabled": current_exists or source_path.is_file() or bool(source_rows),
             "currentPath": self._display_path(self.mom_banner_path),
             "sourcePath": self._display_path(source_path),
             "backupPaths": [self._display_path(path) for path in self._mom_banner_backup_candidates()],
@@ -2342,7 +2505,8 @@ class EditorApp:
             for row in source_rows
             if to_int(row.get("DestinationDomainType")) != 1 or to_int(row.get("MomBannerId")) in selected_ids
         ]
-        self.mom_banner_path.write_text(json.dumps(filtered_rows, indent=2) + "\n", encoding="utf-8")
+        self._write_master_data_rows(self.mom_banner_path, filtered_rows)
+        self._patch_master_memory_tables({"m_mom_banner": filtered_rows})
         return self.gacha_banner_catalog()
 
     def connect(self) -> sqlite3.Connection:
